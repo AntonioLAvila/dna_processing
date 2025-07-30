@@ -3,7 +3,7 @@ from pybind11.setup_helpers import Pybind11Extension, build_ext
 
 ext_modules = [
     Pybind11Extension(
-        "dna_processing",
+        "dna_processing.dna_processing",
         ["dna_processing/dna_processing.cpp"],
         extra_compile_args=["-std=c++20"],
     )
