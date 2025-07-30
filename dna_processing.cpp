@@ -17,12 +17,25 @@
 using json = nlohmann::json;
 
 
-void encode(
-    const std::set<std::string>& chromosomes,
-    const std::string& fasta_file,
-    const std::string& output_directory
+void process_and_write_chromosome(
+    const std::string &chrom_name,
+    size_t &file_offset,
+    size_t chrom_length,
+    json &index
 ) {
+    if (chrom_name.empty() || chrom_length == 0) return;
+    
+    index[chrom_name] = { file_offset, chrom_length };
+    
+    file_offset += chrom_length;
+}
 
+
+void encode(
+    const std::set<std::string> &chromosomes,
+    const std::string &fasta_file,
+    const std::string &output_directory
+) {
     std::ifstream file(fasta_file);
     if (!file) {
         std::cerr << "Couldn't open FASTA file: " << fasta_file << std::endl;
@@ -35,140 +48,136 @@ void encode(
         return;
     }
 
-    std::string line, current_chrom;
-    std::ostringstream seq_buffer;
     json index_json;
-    size_t current_offset = 0;
+    std::string line, current_chrom_name;
+    size_t file_offset = 0;
+    size_t current_chrom_len = 0;
+    bool is_target_chrom = false;
+
     while (std::getline(file, line)) {
-        if (line.empty()) continue;
+        if (line.empty() || line[0] == '\r') continue;
 
         if (line[0] == '>') {
-            // Write previous chromosome to .dat if in set
-            if (!current_chrom.empty() && chromosomes.contains(current_chrom)) {
-                std::string sequence = seq_buffer.str();
-                for (char& base : sequence) {
-                    base = static_cast<char>(std::toupper(base));
-                }
+            // Process the prev chromosome
+            process_and_write_chromosome(current_chrom_name, file_offset, current_chrom_len, index_json);
+            
+            // Reset for new chromosome
+            current_chrom_len = 0;
+            size_t first_space = line.find(' ');
+            current_chrom_name = line.substr(1, first_space - 1);
 
-                data_file.write(sequence.data(), sequence.size());
+            // Check if this new chromosome is one we want to keep
+            is_target_chrom = chromosomes.contains(current_chrom_name);
 
-                // Record offset and length in JSON index
-                index_json[current_chrom] = { current_offset, sequence.size() };
-                current_offset += sequence.size();
-            }
-
-            seq_buffer.str("");
-            seq_buffer.clear();
-
-            std::istringstream iss(line.substr(1));
-            iss >> current_chrom;
-        } else {
-            if (chromosomes.contains(current_chrom)) {
-                seq_buffer << line;
-            }
+        } else if (is_target_chrom) {
+            // Process the line directly without buffering
+            std::transform(line.begin(), line.end(), line.begin(), ::toupper);
+            data_file.write(line.data(), line.size());
+            current_chrom_len += line.size();
         }
     }
 
-    // Handle last chromosome
-    if (!current_chrom.empty() && chromosomes.contains(current_chrom)) {
-        std::string sequence = seq_buffer.str();
-        for (char& base : sequence) {
-            base = static_cast<char>(std::toupper(base));
-        }
-
-        data_file.write(sequence.data(), sequence.size());
-        index_json[current_chrom] = { current_offset, sequence.size() };
-    }
-
+    // Process last chromosome
+    process_and_write_chromosome(current_chrom_name, file_offset, current_chrom_len, index_json);
     data_file.close();
 
-    // Write chromosomes.idx
     std::ofstream index_file(output_directory + "/chromosomes.idx");
     if (!index_file) {
         std::cerr << "Failed to create chromosomes.idx" << std::endl;
         return;
     }
-
     index_file << index_json.dump(2);
 }
 
 
-void mutate(
+bool mutate(
     const std::string &chromosome,
-    const std::vector<std::pair<int, char>>& mutations,
-    const std::string& chromosome_data_path,
-    const std::string& output_path
+    const std::vector<std::tuple<int, std::string, std::string>> &mutations,
+    const std::string &chromosome_data_path,
+    const std::string &output_path
 ) {
-    // Load the JSON index
     std::ifstream index_file(chromosome_data_path + "/chromosomes.idx");
-    if (!index_file) {
-        std::cerr << "Failed to open index file\n";
-        return;
-    }
-
+    if (!index_file) { return false; }
     json index;
     index_file >> index;
-
-    if (!index.contains(chromosome)) {
-        std::cerr << "Chromosome '" << chromosome << "' not found in index.\n";
-        return;
-    }
-
+    if (!index.contains(chromosome)) { return false; }
     size_t offset = index[chromosome][0];
     size_t length = index[chromosome][1];
-
     std::string dat_path = chromosome_data_path + "/chromosomes.dat";
     int fd = open(dat_path.c_str(), O_RDONLY);
-    if (fd == -1) {
-        perror("open");
-        return;
-    }
-
+    if (fd == -1) { return false; }
     char* mapped = static_cast<char*>(mmap(nullptr, offset + length, PROT_READ, MAP_PRIVATE, fd, 0));
-    if (mapped == MAP_FAILED) {
-        perror("mmap");
-        close(fd);
-        return;
-    }
+    if (mapped == MAP_FAILED) { close(fd); return false; }
     close(fd);
 
-    const char* chromosome_seq = mapped + offset;
+    const char* original_seq = mapped + offset;
 
-    std::string mutated_seq(chromosome_seq, length);
-    for (const auto& [pos, base] : mutations) {
-        if (pos < 0 || static_cast<size_t>(pos) >= length) {
-            std::cerr << "Warning: Mutation position " << pos << " is out of bounds for " << chromosome << "\n";
-            continue;
+    std::vector<size_t> mutation_indices(mutations.size());
+    std::iota(mutation_indices.begin(), mutation_indices.end(), 0);
+
+    std::sort(mutation_indices.begin(), mutation_indices.end(),
+        [&mutations](size_t a_idx, size_t b_idx) {
+            return std::get<0>(mutations[a_idx]) < std::get<0>(mutations[b_idx]);
+        });
+
+    // Pre-calculating final_size
+    size_t final_size = length;
+    for (const auto &[pos, type, bases] : mutations) {
+        if (type == "INS") final_size += bases.length();
+        else if (type == "DEL") final_size--;
+    }
+    std::string mutated_seq;
+    mutated_seq.reserve(final_size);
+
+    size_t last_pos = 0;
+    for (size_t index : mutation_indices) {
+        const auto& [pos, type, bases] = mutations[index];
+
+        if (pos < 0 || static_cast<size_t>(pos) > length) { /* ... */ continue; }
+        
+        // Append unchanged chunk
+        if (static_cast<size_t>(pos) > last_pos) {
+            mutated_seq.append(original_seq + last_pos, pos - last_pos);
         }
-        mutated_seq[pos] = std::toupper(base);
+
+        if (type == "SNV") {
+            mutated_seq.append(bases);
+            last_pos = pos + 1;
+        } else if (type == "INS") {
+            mutated_seq.append(bases);
+            last_pos = pos;
+        } else if (type == "DEL") {
+            last_pos = pos + bases.length();
+        }
     }
 
+    if (last_pos < length) {
+        mutated_seq.append(original_seq + last_pos, length - last_pos);
+    }
+    
     std::ofstream out(output_path);
     if (!out) {
-        std::cerr << "Failed to open output file: " << output_path << "\n";
         munmap(mapped, offset + length);
-        return;
+        return false;
     }
-
-    // wrap lines at 60 bases like FASTA
     const size_t line_width = 60;
     for (size_t i = 0; i < mutated_seq.size(); i += line_width) {
         out << mutated_seq.substr(i, line_width) << '\n';
     }
-
     munmap(mapped, offset + length);
+    return true;
 }
 
 
 int main() {
 
-    encode({"1", "X"}, "Homo_sapiens.GRCh38.dna.primary_assembly.fa", "test_out");
+    encode({"1", "X"}, "test/Homo_sapiens.GRCh38.dna.primary_assembly.fa", "test/test_out");
 
     mutate(
         "1",
-        { {0, 'G'}, {5, 'A'} },
-        "test_out",
-        "chr1_mutations.txt"
+        { {0, "INS", "A"}, {5, "DEL", ""} },
+        "test/test_out",
+        "test/chr1_mutations.txt"
     );
     
     return 0;
