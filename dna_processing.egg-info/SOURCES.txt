@@ -1,0 +1,13 @@
+README.md
+pyproject.toml
+setup.py
+dna_processing/__init__.py
+dna_processing/dna_processing.cpp
+dna_processing/dna_processing.pyi
+dna_processing/py.typed
+dna_processing.egg-info/PKG-INFO
+dna_processing.egg-info/SOURCES.txt
+dna_processing.egg-info/dependency_links.txt
+dna_processing.egg-info/not-zip-safe
+dna_processing.egg-info/top_level.txt
+test/test.py

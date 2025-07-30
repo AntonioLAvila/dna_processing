@@ -1,5 +1,5 @@
-// #include <pybind11/pybind11.h>
-// #include <pybind11/stl.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
 #include <fstream>
 #include <vector>
 #include <string>
@@ -13,16 +13,11 @@
 #include <sys/mman.h>
 #include "json.hpp"
 
-// namespace py = pybind11;
+namespace py = pybind11;
 using json = nlohmann::json;
 
 
-void process_and_write_chromosome(
-    const std::string &chrom_name,
-    size_t &file_offset,
-    size_t chrom_length,
-    json &index
-) {
+void process_and_write_chromosome( const std::string &chrom_name, size_t &file_offset, size_t chrom_length, json &index) {
     if (chrom_name.empty() || chrom_length == 0) return;
     
     index[chrom_name] = { file_offset, chrom_length };
@@ -31,11 +26,7 @@ void process_and_write_chromosome(
 }
 
 
-void encode(
-    const std::set<std::string> &chromosomes,
-    const std::string &fasta_file,
-    const std::string &output_directory
-) {
+void encode_fasta(const std::set<std::string> &chromosomes, const std::string &fasta_file, const std::string &output_directory) {
     std::ifstream file(fasta_file);
     if (!file) {
         std::cerr << "Couldn't open FASTA file: " << fasta_file << std::endl;
@@ -169,37 +160,37 @@ bool mutate(
 }
 
 
-int main() {
+// int main() {
 
-    encode({"1", "X"}, "test/Homo_sapiens.GRCh38.dna.primary_assembly.fa", "test/test_out");
+//     encode_fasta({"1", "X"}, "test/Homo_sapiens.GRCh38.dna.primary_assembly.fa", "test/test_out");
 
-    mutate(
-        "1",
-        { {0, "INS", "A"}, {5, "DEL", ""} },
-        "test/test_out",
-        "test/chr1_mutations.txt"
-    );
+//     mutate(
+//         "1",
+//         { {0, "INS", "A"}, {5, "DEL", ""} },
+//         "test/test_out",
+//         "test/chr1_mutations.txt"
+//     );
     
-    return 0;
-}
-
-// PYBIND11_MODULE(dna_processing, m) {
-//     m.doc() = "Library for mutating DNA sequences.";
-//     m.def(
-//         "encode",
-//         &encode,
-//         "Stores specific chromosomes from a fasta file in a quickly accessible way.",
-//         py::arg("chromosomes"),
-//         py::arg("fasta_file"),
-//         py::arg("output_directory")
-//     );
-//     m.def(
-//         "mutate",
-//         &mutate,
-//         "Mutates a chromosome from the parsed data and store it where you specify.",
-//         py::arg("chromosome"),
-//         py::arg("mutations"),
-//         py::arg("chromosome_data_directory"),
-//         py::arg("output_filepath")
-//     );
+//     return 0;
 // }
+
+PYBIND11_MODULE(dna_processing, m) {
+    m.doc() = "Library for mutating DNA sequences.";
+    m.def(
+        "encode_fasta",
+        &encode_fasta,
+        "Stores specific chromosomes from a fasta file in a quickly accessible way.",
+        py::arg("chromosomes"),
+        py::arg("fasta_file"),
+        py::arg("output_directory")
+    );
+    m.def(
+        "mutate",
+        &mutate,
+        "Mutates a chromosome from the parsed data and store it where you specify.",
+        py::arg("chromosome"),
+        py::arg("mutations"),
+        py::arg("chromosome_data_directory"),
+        py::arg("output_filepath")
+    );
+}
